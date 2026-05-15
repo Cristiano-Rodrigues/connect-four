@@ -19,10 +19,11 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.8.0",
     "@types/uuid": "^10.0.0",
+    "tsx": "^4.22.0",
     "typescript": "^6.0.3"
   },
   "scripts": {
-    "dev": "npx tsc && nodemon ./dist/server.js"
+    "dev": "npx nodemon --exec tsx server.ts --ext ts"
   },
   "keywords": [],
   "author": "",

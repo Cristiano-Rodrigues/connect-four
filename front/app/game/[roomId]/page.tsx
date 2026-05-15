@@ -29,7 +29,10 @@ export default function GameRoom() {
 	const [inputMessage, setInputMessage] = useState('');
 	const [history, setHistory] = useState<MatchRecord[]>([]);
 	const [nickname, setNickname] = useState<string>('Anônimo');
+	const [robotDifficulty, setRobotDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
 	const [playerRole, setPlayerRole] = useState<1 | 2 | null>(null);
+	const [p1Name, setP1Name] = useState<string>('Jogador 1');
+	const [p2Name, setP2Name] = useState<string>('Jogador 2');
 	
 	const socketRef = useRef<Socket | null>(null);
 	const chatEndRef = useRef<HTMLDivElement>(null);
@@ -47,31 +50,71 @@ export default function GameRoom() {
 	}, []);
 
 	useEffect(() => {
+		if (roomId !== 'robot') {
+			const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+			fetch(`${apiUrl}/api/rooms/${roomId}/messages`)
+				.then(res => res.json())
+				.then(data => setMessages(data))
+				.catch(err => console.error("Error fetching messages:", err));
+			
+			fetch(`${apiUrl}/api/rooms/${roomId}/matches`)
+				.then(res => res.json())
+				.then(data => setHistory(data))
+				.catch(err => console.error("Error fetching matches:", err));
+		}
+	}, [roomId]);
+
+	useEffect(() => {
 		if (roomId === 'robot') {
 			setStatus('ready');
 			return;
 		}
 
-		const socket = io(process.env.NEXT_PUBLIC_API_URL);
+		const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+		const socket = io(apiUrl);
 		socketRef.current = socket;
+		const nicknameValue = nickname;
 
 		socket.on('connect', () => {
-			socket.emit('join_room', roomId);
+			socket.emit('join_room', { roomId, nickname: nicknameValue });
 		});
 
-		socket.on('room_joined', (data: { roomId: string, status: Status }) => {
+		socket.on('room_joined', (data: { roomId: string, status: Status, player1?: string, player2?: string }) => {
 			setStatus(data.status);
+			if (data.player1) setP1Name(data.player1);
+			if (data.player2) setP2Name(data.player2);
 			if (data.status === 'waiting') setPlayerRole(1);
 			else if (data.status === 'ready') setPlayerRole(2);
 		});
 
-		socket.on('game_ready', () => {
+		socket.on('game_ready', (data: any) => {
 			setStatus('ready');
+			if (data && data.player1) setP1Name(data.player1);
+			if (data && data.player2) setP2Name(data.player2);
 			if (playerRole === null) setPlayerRole(2);
 		});
 
 		socket.on('receive_message', (msg: ChatMessage) => {
 			setMessages(prev => [...prev, msg]);
+		});
+
+		socket.on('game_update', (data: any) => {
+			const updatedGame = new ConnectFour();
+			if (data.grid && data.grid.cells) {
+				updatedGame.grid.cells = data.grid.cells;
+				updatedGame.grid.width = data.grid.width;
+				updatedGame.grid.height = data.grid.height;
+			}
+			updatedGame.turn = data.turn;
+			updatedGame.state = data.state;
+			updatedGame.winner = data.winner;
+			setGame(updatedGame);
+			if (data.player1) setP1Name(data.player1);
+			if (data.player2) setP2Name(data.player2);
+		});
+
+		socket.on('match_history_update', (data: MatchRecord[]) => {
+			setHistory(data);
 		});
 
 		socket.on('room_full', () => {
@@ -103,13 +146,38 @@ export default function GameRoom() {
 	};
 
 	const handleMove = (col: number) => {
-		const result = game.insertTile(col);
-		if (result) {
-			setGame(new ConnectFour(game.grid, game.turn, game.state, game.winner));
+		if (roomId === 'robot') {
+			if (game.state !== 'playing' || game.turn % 2 !== 1) return;
 			
-			if (game.state === 'won' || game.state === 'tied') {
-				const winnerName = game.state === 'won' ? (game.winner === 1 ? 'Jogador 1' : 'Jogador 2') : 'Empate';
-				setHistory(prev => [{ winner: winnerName, date: new Date().toLocaleTimeString() }, ...prev]);
+			const newGame = game.clone();
+			const result = newGame.insertTile(col);
+			
+			if (result) {
+				setGame(newGame);
+				if (newGame.state === 'playing') {
+					setTimeout(() => {
+						setGame(currentGame => {
+							const botGame = currentGame.clone();
+							const robotCol = botGame.getRobotMove(robotDifficulty);
+							if (robotCol !== -1) {
+								botGame.insertTile(robotCol);
+								if (botGame.state === 'won' || botGame.state === 'tied') {
+									const winnerName = botGame.state === 'won' ? (botGame.winner === 1 ? 'Jogador' : 'Robô') : 'Empate';
+									setHistory(prev => [{ winner: winnerName, date: new Date().toLocaleTimeString() }, ...prev]);
+								}
+								return botGame;
+							}
+							return currentGame;
+						});
+					}, 500);
+				} else {
+					const winnerName = newGame.state === 'won' ? 'Jogador' : 'Empate';
+					setHistory(prev => [{ winner: winnerName, date: new Date().toLocaleTimeString() }, ...prev]);
+				}
+			}
+		} else {
+			if (socketRef.current) {
+				socketRef.current.emit('make_move', { roomId, col });
 			}
 		}
 	};
@@ -179,14 +247,26 @@ export default function GameRoom() {
 				
 				<div className="flex items-center gap-6">
 					<div className="flex items-center gap-4 bg-white/5 px-4 py-1.5 rounded-full border border-white/10">
+						{roomId === 'robot' && (
+							<select 
+								value={robotDifficulty}
+								onChange={(e) => setRobotDifficulty(e.target.value as any)}
+								className="bg-transparent text-sm font-medium text-gray-300 outline-none border-none cursor-pointer"
+							>
+								<option value="easy" className="text-black">Fácil</option>
+								<option value="medium" className="text-black">Médio</option>
+								<option value="hard" className="text-black">Difícil</option>
+							</select>
+						)}
+						{roomId === 'robot' && <div className="w-px h-3 bg-white/10"></div>}
 						<div className="flex items-center gap-2">
 							<div className="w-3 h-3 rounded-full bg-red-400"></div>
-							<span className="text-xs font-medium text-gray-300">P1: Jogador 1</span>
+							<span className="text-xs font-medium text-gray-300">P1: {roomId === 'robot' ? 'Jogador' : (p1Name === nickname ? 'Você' : p1Name)}</span>
 						</div>
 						<div className="w-px h-3 bg-white/10"></div>
 						<div className="flex items-center gap-2">
 							<div className="w-3 h-3 rounded-full bg-yellow-400"></div>
-							<span className="text-xs font-medium text-gray-300">P2: Jogador 2</span>
+							<span className="text-xs font-medium text-gray-300">P2: {roomId === 'robot' ? 'Robô' : (p2Name === nickname ? 'Você' : p2Name)}</span>
 						</div>
 					</div>
 					
@@ -238,14 +318,21 @@ export default function GameRoom() {
 								<>
 									<RefreshCw size={20} className="animate-spin text-indigo-400" />
 									<span className="font-semibold text-lg tracking-tight">
-										{game.turn % 2 === 1 ? 'Turno do Jogador 1 (Vermelho)' : 'Turno do Jogador 2 (Amarelo)'}
+										{game.turn % 2 === 1 
+											? `Turno de ${roomId === 'robot' ? 'Jogador' : (p1Name === nickname ? 'Você' : p1Name)} (Vermelho)` 
+											: `Turno de ${roomId === 'robot' ? 'Robô' : (p2Name === nickname ? 'Você' : p2Name)} (Amarelo)`}
 									</span>
 								</>
 							) : (
 								<>
 									<Trophy size={24} className={game.state === 'won' ? "text-yellow-400" : "text-gray-400"} />
 									<span className="font-bold text-xl tracking-tight uppercase">
-										{game.state === 'won' ? `${game.winner === 1 ? 'Jogador 1' : 'Jogador 2'} Venceu!` : 'Jogo Empatado!'}
+										{game.state === 'won' 
+											? `${game.winner === 1 
+													? (roomId === 'robot' ? 'Jogador' : (p1Name === nickname ? 'Você' : p1Name)) 
+													: (roomId === 'robot' ? 'Robô' : (p2Name === nickname ? 'Você' : p2Name))
+												} Venceu!` 
+											: 'Jogo Empatado!'}
 									</span>
 								</>
 							)}
@@ -287,7 +374,13 @@ export default function GameRoom() {
 
 					<button
 						className="px-8 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all font-bold text-sm tracking-widest uppercase active:scale-95 shadow-lg flex items-center gap-2 group"
-						onClick={() => setGame(new ConnectFour())}
+						onClick={() => {
+							if (roomId === 'robot') {
+								setGame(new ConnectFour());
+							} else if (socketRef.current) {
+								socketRef.current.emit('restart_game', { roomId });
+							}
+						}}
 					>
 						<RefreshCw size={16} className="group-hover:rotate-180 transition-transform duration-500" />
 						Reiniciar Partida

@@ -53,7 +53,7 @@ export default function LoginPage() {
 
       if (activeTab === 'login') {
         Cookies.set('access_token', result.access_token, { expires: 1 });
-        router.push('/');
+        router.push('/setup-room');
         router.refresh();
       } else {
         setSuccess('Usuário criado com sucesso! Faça login para continuar.');
