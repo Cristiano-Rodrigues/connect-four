@@ -79,7 +79,11 @@ export default function LoginPage() {
         <div className="bg-[#141414] border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
           <div className="flex border-b border-white/10">
             <button
-              onClick={() => { setActiveTab('login'); setError(null); setSuccess(null); reset(); }}
+              onClick={() => {
+                setActiveTab('login');
+                setError(null);
+                setSuccess(null);
+                reset(); }}
               className={`flex-1 py-4 text-sm font-medium transition-all duration-200 flex items-center justify-center gap-2 ${
                 activeTab === 'login' ? 'text-white border-b-2 border-indigo-500 bg-white/5' : 'text-gray-500 hover:text-gray-300'
               }`}

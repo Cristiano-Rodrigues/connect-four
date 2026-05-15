@@ -28,7 +28,18 @@ export default function GameRoom() {
 	const [messages, setMessages] = useState<ChatMessage[]>([]);
 	const [inputMessage, setInputMessage] = useState('');
 	const [history, setHistory] = useState<MatchRecord[]>([]);
-	const [nickname, setNickname] = useState<string>('Anônimo');
+	const [nickname, setNickname] = useState<string>(() => {
+		if (typeof window === 'undefined') return 'Anônimo';
+		try {
+			const Cookies = require('js-cookie');
+			const token = Cookies.get('access_token');
+			if (token) {
+				const payload = JSON.parse(atob(token.split('.')[1]));
+				return payload.nickname || 'Anônimo';
+			}
+		} catch (e) {}
+		return 'Anônimo';
+	});
 	const [robotDifficulty, setRobotDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
 	const [playerRole, setPlayerRole] = useState<1 | 2 | null>(null);
 	const [p1Name, setP1Name] = useState<string>('Jogador 1');
@@ -42,7 +53,7 @@ export default function GameRoom() {
 		if (token) {
 			try {
 				const payload = JSON.parse(atob(token.split('.')[1]));
-				setNickname(payload.nickname || 'Jogador');
+				if (payload.nickname) setNickname(payload.nickname);
 			} catch (e) {
 				console.error("Error decoding token", e);
 			}
@@ -73,10 +84,17 @@ export default function GameRoom() {
 		const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 		const socket = io(apiUrl);
 		socketRef.current = socket;
-		const nicknameValue = nickname;
 
 		socket.on('connect', () => {
-			socket.emit('join_room', { roomId, nickname: nicknameValue });
+			let currentNickname = 'Anônimo';
+			try {
+				const token = Cookies.get('access_token');
+				if (token) {
+					const payload = JSON.parse(atob(token.split('.')[1]));
+					currentNickname = payload.nickname || 'Anônimo';
+				}
+			} catch (e) {}
+			socket.emit('join_room', { roomId, nickname: currentNickname });
 		});
 
 		socket.on('room_joined', (data: { roomId: string, status: Status, player1?: string, player2?: string }) => {
@@ -99,15 +117,7 @@ export default function GameRoom() {
 		});
 
 		socket.on('game_update', (data: any) => {
-			const updatedGame = new ConnectFour();
-			if (data.grid && data.grid.cells) {
-				updatedGame.grid.cells = data.grid.cells;
-				updatedGame.grid.width = data.grid.width;
-				updatedGame.grid.height = data.grid.height;
-			}
-			updatedGame.turn = data.turn;
-			updatedGame.state = data.state;
-			updatedGame.winner = data.winner;
+			const updatedGame = new ConnectFour(data.grid, data.turn, data.state, data.winner);
 			setGame(updatedGame);
 			if (data.player1) setP1Name(data.player1);
 			if (data.player2) setP2Name(data.player2);
@@ -381,6 +391,7 @@ export default function GameRoom() {
 								socketRef.current.emit('restart_game', { roomId });
 							}
 						}}
+						disabled={game.state == 'playing' }
 					>
 						<RefreshCw size={16} className="group-hover:rotate-180 transition-transform duration-500" />
 						Reiniciar Partida
