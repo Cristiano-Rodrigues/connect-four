@@ -91,6 +91,10 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('send_message', ({ roomId, message, nickname }) => {
+    io.to(roomId).emit('receive_message', { message, nickname, timestamp: new Date().toISOString() });
+  });
+
   socket.on('disconnect', () => {
     console.log(`User disconnected: ${socket.id}`);
   });

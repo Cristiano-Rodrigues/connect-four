@@ -4,18 +4,47 @@ import { ConnectFour } from "@/lib/game";
 import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
 import { io, Socket } from "socket.io-client";
-import { Loader2, Users, AlertCircle } from "lucide-react";
+import { Loader2, Users, AlertCircle, Send, History, MessageSquare, Trophy, User as UserIcon, RefreshCw } from "lucide-react";
+import Cookies from 'js-cookie';
 
 type Status = 'connecting' | 'waiting' | 'ready' | 'full';
+
+interface ChatMessage {
+  nickname: string;
+  message: string;
+  timestamp: string;
+}
+
+interface MatchRecord {
+  winner: string;
+  date: string;
+}
 
 export default function GameRoom() {
 	const params = useParams();
 	const roomId = params.roomId as string;
 	const [game, setGame] = useState(new ConnectFour());
-	const currPlayer = 1;
-
 	const [status, setStatus] = useState<Status>('connecting');
+	const [messages, setMessages] = useState<ChatMessage[]>([]);
+	const [inputMessage, setInputMessage] = useState('');
+	const [history, setHistory] = useState<MatchRecord[]>([]);
+	const [nickname, setNickname] = useState<string>('Anônimo');
+	const [playerRole, setPlayerRole] = useState<1 | 2 | null>(null);
+	
 	const socketRef = useRef<Socket | null>(null);
+	const chatEndRef = useRef<HTMLDivElement>(null);
+
+	useEffect(() => {
+		const token = Cookies.get('access_token');
+		if (token) {
+			try {
+				const payload = JSON.parse(atob(token.split('.')[1]));
+				setNickname(payload.nickname || 'Jogador');
+			} catch (e) {
+				console.error("Error decoding token", e);
+			}
+		}
+	}, []);
 
 	useEffect(() => {
 		if (roomId === 'robot') {
@@ -32,10 +61,17 @@ export default function GameRoom() {
 
 		socket.on('room_joined', (data: { roomId: string, status: Status }) => {
 			setStatus(data.status);
+			if (data.status === 'waiting') setPlayerRole(1);
+			else if (data.status === 'ready') setPlayerRole(2);
 		});
 
 		socket.on('game_ready', () => {
 			setStatus('ready');
+			if (playerRole === null) setPlayerRole(2);
+		});
+
+		socket.on('receive_message', (msg: ChatMessage) => {
+			setMessages(prev => [...prev, msg]);
 		});
 
 		socket.on('room_full', () => {
@@ -48,9 +84,39 @@ export default function GameRoom() {
 		};
 	}, [roomId]);
 
+	useEffect(() => {
+		chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+	}, [messages]);
+
+	const sendMessage = (e?: React.FormEvent) => {
+		e?.preventDefault();
+		if (!inputMessage.trim() || !socketRef.current) return;
+
+		const msgData = {
+			roomId,
+			message: inputMessage,
+			nickname
+		};
+
+		socketRef.current.emit('send_message', msgData);
+		setInputMessage('');
+	};
+
+	const handleMove = (col: number) => {
+		const result = game.insertTile(col);
+		if (result) {
+			setGame(new ConnectFour(game.grid, game.turn, game.state, game.winner));
+			
+			if (game.state === 'won' || game.state === 'tied') {
+				const winnerName = game.state === 'won' ? (game.winner === 1 ? 'Jogador 1' : 'Jogador 2') : 'Empate';
+				setHistory(prev => [{ winner: winnerName, date: new Date().toLocaleTimeString() }, ...prev]);
+			}
+		}
+	};
+
 	if (status === 'connecting') {
 		return (
-			<div className="flex flex-col justify-center items-center h-screen bg-[#0a0a0a] text-white">
+			<div className="flex flex-col justify-center items-center h-screen bg-[#1a1a1a] text-white">
 				<Loader2 size={48} className="animate-spin text-indigo-500 mb-4" />
 				<p className="text-gray-400">Conectando à sala...</p>
 			</div>
@@ -59,87 +125,257 @@ export default function GameRoom() {
 
 	if (status === 'full') {
 		return (
-			<div className="flex flex-col justify-center items-center h-screen bg-[#0a0a0a] text-white">
-				<AlertCircle size={64} className="text-red-500 mb-4" />
-				<h1 className="text-2xl font-bold mb-2">Sala Cheia</h1>
-				<p className="text-gray-400">Limite máximo de jogadores atingido!</p>
+			<div className="flex flex-col justify-center items-center h-screen bg-[#1a1a1a] text-white p-4">
+				<div className="max-w-md w-full bg-[#242424] border border-white/10 rounded-2xl p-8 text-center shadow-2xl">
+					<AlertCircle size={64} className="text-red-500 mx-auto mb-4" />
+					<h1 className="text-2xl font-bold mb-2">Sala Cheia</h1>
+					<p className="text-gray-400">Limite máximo de jogadores atingido!</p>
+					<button 
+						onClick={() => window.location.href = '/setup-room'}
+						className="mt-6 w-full py-3 bg-indigo-600 hover:bg-indigo-500 rounded-xl font-semibold transition-all"
+					>
+						Voltar ao Início
+					</button>
+				</div>
 			</div>
 		);
 	}
 
 	if (status === 'waiting') {
 		return (
-			<div className="flex flex-col justify-center items-center h-screen bg-[#0a0a0a] text-white">
-				<div className="relative mb-8">
-					<Users size={64} className="text-indigo-500 opacity-50" />
-					<div className="absolute top-0 right-0 w-4 h-4 bg-emerald-500 rounded-full animate-ping"></div>
-				</div>
-				<h1 className="text-2xl font-bold mb-2">Aguardando Oponente</h1>
-				<p className="text-gray-400 text-center max-w-md">
-					Partilhe o link com o seu amigo para ele se juntar à partida.<br/>
-					<span className="text-indigo-400 font-mono text-sm mt-4 block p-2 bg-white/5 rounded-lg">
+			<div className="flex flex-col justify-center items-center h-screen bg-[#1a1a1a] text-white p-4">
+				<div className="max-w-md w-full bg-[#242424] border border-white/10 rounded-2xl p-8 text-center shadow-2xl">
+					<div className="relative mx-auto w-20 h-20 mb-6">
+						<Users size={64} className="text-indigo-500 opacity-50" />
+						<div className="absolute top-0 right-0 w-4 h-4 bg-emerald-500 rounded-full animate-ping"></div>
+					</div>
+					<h1 className="text-2xl font-bold mb-2">Aguardando Oponente</h1>
+					<p className="text-gray-400 text-sm mb-6">Partilhe o link com o seu amigo para ele se juntar à partida.</p>
+					<div className="bg-white/5 p-3 rounded-xl border border-white/10 font-mono text-xs break-all mb-4">
 						{typeof window !== 'undefined' ? window.location.href : ''}
-					</span>
-				</p>
+					</div>
+					<button 
+						onClick={() => {
+							navigator.clipboard.writeText(window.location.href);
+						}}
+						className="w-full py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-sm font-semibold transition-all"
+					>
+						Copiar Link
+					</button>
+				</div>
 			</div>
 		);
 	}
 
 	return (
-		<div className="flex flex-col justify-center items-center h-screen">
-			<div className="flex flex-col gap-6 items-center max-w-xl w-full p-8">
-				<div className="text-center w-full">
-					<h2 className="text-xl font-bold mb-2">
-						{roomId === 'robot' ? 'Jogando contra o Robô' : 'Partida Multiplayer'}
-					</h2>
-					<div className="px-4 py-2 bg-white/5 rounded-lg border border-white/10 inline-block">
-						{
-							game.state == 'playing' ?
-								(game.turn % 2 === currPlayer ? <span className="font-semibold">Sua vez</span> : <span className="text-amber-400 font-semibold">Espere pelo outro jogador</span>) :
-								(game.state == 'won' ? (game.winner == currPlayer ? <span className="text-indigo-400 font-bold">Você ganhou!</span> : <span className="text-red-400 font-bold">Você perdeu!</span>) : <span className="text-gray-400 font-bold">Jogo empatado!</span>)
-						}
+		<div className="min-h-screen bg-[#1a1a1a] text-white flex flex-col font-sans">
+			<header className="h-16 border-b border-white/5 bg-[#242424]/50 backdrop-blur-md flex items-center justify-between px-8 z-10 sticky top-0">
+				<div className="flex items-center gap-3">
+					<div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+						<Trophy size={18} />
+					</div>
+					<h1 className="font-bold tracking-tight text-lg">Connect Four</h1>
+				</div>
+				
+				<div className="flex items-center gap-6">
+					<div className="flex items-center gap-4 bg-white/5 px-4 py-1.5 rounded-full border border-white/10">
+						<div className="flex items-center gap-2">
+							<div className="w-3 h-3 rounded-full bg-red-400"></div>
+							<span className="text-xs font-medium text-gray-300">P1: Jogador 1</span>
+						</div>
+						<div className="w-px h-3 bg-white/10"></div>
+						<div className="flex items-center gap-2">
+							<div className="w-3 h-3 rounded-full bg-yellow-400"></div>
+							<span className="text-xs font-medium text-gray-300">P2: Jogador 2</span>
+						</div>
+					</div>
+					
+					<div className="flex items-center gap-2 text-sm">
+						<UserIcon size={16} className="text-gray-500" />
+						<span className="text-gray-400 italic">{nickname}</span>
 					</div>
 				</div>
-				<div className="grid grid-cols-7 gap-2 p-4">
-					{
-						game.grid.cells.map((cell: number, index: number) => {
-							return (
-								<div
-									key={index}
-									className={`w-12 h-12 cursor-pointer transition-all duration-300 shadow-inner flex items-center justify-center
-										${cell === 0 ? 'bg-gray-400 hover:bg-white/10' : ''}
-										${cell === 1 ? 'bg-red-400' : ''}
-										${cell === 2 ? 'bg-yellow-400' : ''}
-									`}
-									onClick={() => {
-										if (game.state == 'won' || game.state == 'tied') {
-											return;
-										}
+			</header>
 
-										const col = index % game.grid.width;
-										const result = game.insertTile(col);
-
-										if (result) {
-											setGame(new ConnectFour(game.grid, game.turn, game.state, game.winner));
-										}
-									}}
-								>
+			<main className="flex-1 p-6 grid grid-cols-1 lg:grid-cols-[280px_1fr_320px] gap-6 overflow-hidden max-w-[1600px] mx-auto w-full">
+				<aside className="hidden lg:flex flex-col bg-[#242424] rounded-2xl border border-white/10 overflow-hidden shadow-xl">
+					<div className="p-4 border-b border-white/5 flex items-center gap-2 bg-white/5">
+						<History size={18} className="text-indigo-400" />
+						<h3 className="font-bold text-sm">Histórico da Sala</h3>
+					</div>
+					<div className="flex-1 overflow-y-auto p-4 space-y-3">
+						{history.length === 0 ? (
+							<div className="h-full flex flex-col items-center justify-center text-center opacity-30 py-10">
+								<History size={48} className="mb-2" />
+								<p className="text-xs">Nenhuma partida registrada</p>
+							</div>
+						) : (
+							history.map((record, i) => (
+								<div key={i} className="bg-white/5 border border-white/5 p-3 rounded-xl flex justify-between items-center animate-in slide-in-from-left-4">
+									<div>
+										<p className="text-xs text-gray-500 mb-1">{record.date}</p>
+										<p className="text-sm font-semibold">{record.winner}</p>
+									</div>
+									<div className="w-8 h-8 rounded-full bg-indigo-600/20 flex items-center justify-center text-indigo-400">
+										<Trophy size={14} />
+									</div>
 								</div>
-							)
-						})
-					}
-				</div>
-				<div className="flex justify-end w-full">
+							))
+						)}
+					</div>
+				</aside>
+
+				<section className="flex flex-col gap-6 items-center overflow-y-auto min-h-0">
+					<div className="w-full max-w-lg">
+						<div className={`p-4 rounded-2xl border backdrop-blur-sm transition-all duration-500 flex items-center justify-center gap-3 shadow-lg ${
+							game.state === 'playing' 
+								? 'bg-indigo-600/10 border-indigo-500/20 text-indigo-100'
+								: game.state === 'won'
+									? 'bg-emerald-600/20 border-emerald-500/20 text-emerald-100 scale-105'
+									: 'bg-white/5 border-white/10 text-gray-300'
+						}`}>
+							{game.state === 'playing' ? (
+								<>
+									<RefreshCw size={20} className="animate-spin text-indigo-400" />
+									<span className="font-semibold text-lg tracking-tight">
+										{game.turn % 2 === 1 ? 'Turno do Jogador 1 (Vermelho)' : 'Turno do Jogador 2 (Amarelo)'}
+									</span>
+								</>
+							) : (
+								<>
+									<Trophy size={24} className={game.state === 'won' ? "text-yellow-400" : "text-gray-400"} />
+									<span className="font-bold text-xl tracking-tight uppercase">
+										{game.state === 'won' ? `${game.winner === 1 ? 'Jogador 1' : 'Jogador 2'} Venceu!` : 'Jogo Empatado!'}
+									</span>
+								</>
+							)}
+						</div>
+					</div>
+
+					<div className="bg-[#242424] p-6 rounded-3xl border border-white/10 shadow-2xl relative">
+						<div className="grid grid-cols-7 gap-3 bg-indigo-950/30 p-4 rounded-2xl border border-indigo-500/20 backdrop-blur-sm">
+							{game.grid.cells.map((cell: number, index: number) => {
+								const col = index % game.grid.width;
+								return (
+									<div
+										key={index}
+										className={`relative w-12 h-12 sm:w-14 sm:h-14 md:w-16 md:h-16 rounded-full cursor-pointer transition-all duration-200 overflow-hidden group
+											${cell === 0 ? 'bg-[#1a1a1a] shadow-[inset_0_2px_10px_rgba(0,0,0,0.5)] hover:bg-white/5' : ''}
+										`}
+										onClick={() => handleMove(col)}
+									>
+										{cell !== 0 && (
+											<div className={`absolute inset-1 rounded-full shadow-lg transform transition-all duration-500 animate-drop ${
+												cell === 1 
+													? 'bg-gradient-to-br from-red-400 to-red-600 shadow-red-950/50' 
+													: 'bg-gradient-to-br from-yellow-300 to-yellow-500 shadow-yellow-950/50'
+											}`}>
+												<div className="absolute inset-0 bg-white/20 rounded-full blur-[2px] opacity-30 transform -translate-x-1 -translate-y-1 scale-75"></div>
+											</div>
+										)}
+									</div>
+								);
+							})}
+						</div>
+
+						<div className="absolute -top-4 left-10 right-10 flex justify-between pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+							{[...Array(7)].map((_, i) => (
+								<div key={i} className="w-16 h-2 rounded-full bg-white/10"></div>
+							))}
+						</div>
+					</div>
+
 					<button
-						className="px-6 py-2 rounded-xl bg-gray-400 text-sm font-semibold cursor-pointer"
-						onClick={() => {
-							setGame(new ConnectFour())
-						}}
+						className="px-8 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 transition-all font-bold text-sm tracking-widest uppercase active:scale-95 shadow-lg flex items-center gap-2 group"
+						onClick={() => setGame(new ConnectFour())}
 					>
-						Reiniciar Jogo
+						<RefreshCw size={16} className="group-hover:rotate-180 transition-transform duration-500" />
+						Reiniciar Partida
 					</button>
-				</div>
-			</div>
+				</section>
+
+				<aside className="flex flex-col bg-[#242424] rounded-2xl border border-white/10 overflow-hidden shadow-xl h-[500px] lg:h-auto">
+					<div className="p-4 border-b border-white/5 flex items-center justify-between bg-white/5">
+						<div className="flex items-center gap-2">
+							<MessageSquare size={18} className="text-indigo-400" />
+							<h3 className="font-bold text-sm">Chat da Sala</h3>
+						</div>
+						<div className="flex items-center gap-1.5 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+							<div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+							<span className="text-[10px] font-bold text-emerald-500 uppercase tracking-tighter">Live</span>
+						</div>
+					</div>
+
+					<div className="flex-1 overflow-y-auto p-4 space-y-4">
+						{messages.length === 0 ? (
+							<div className="h-full flex flex-col items-center justify-center text-center opacity-30 py-10">
+								<MessageSquare size={48} className="mb-2" />
+								<p className="text-xs">Inicie uma conversa!</p>
+							</div>
+						) : (
+							messages.map((msg, i) => (
+								<div key={i} className={`flex flex-col ${msg.nickname === nickname ? 'items-end' : 'items-start'} animate-in slide-in-from-bottom-2`}>
+									<span className="text-[10px] text-gray-500 mb-1 px-1">{msg.nickname}</span>
+									<div className={`max-w-[85%] px-4 py-2 rounded-2xl text-sm shadow-md ${
+										msg.nickname === nickname 
+											? 'bg-indigo-600 text-white rounded-tr-none' 
+											: 'bg-white/10 text-gray-200 rounded-tl-none border border-white/5'
+									}`}>
+										{msg.message}
+									</div>
+								</div>
+							))
+						)}
+						<div ref={chatEndRef} />
+					</div>
+
+					<div className="p-4 bg-white/5 border-t border-white/5">
+						<form onSubmit={sendMessage} className="flex gap-2">
+							<input
+								type="text"
+								value={inputMessage}
+								onChange={(e) => setInputMessage(e.target.value)}
+								placeholder="Sua mensagem..."
+								className="flex-1 bg-black/20 border border-white/10 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-indigo-500/50 transition-all placeholder:text-gray-600"
+							/>
+							<button 
+								type="submit"
+								className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center hover:bg-indigo-500 transition-all active:scale-90"
+							>
+								<Send size={18} />
+							</button>
+						</form>
+					</div>
+				</aside>
+			</main>
+
+			<style jsx global>{`
+				@keyframes drop {
+					from { transform: translateY(-300%); opacity: 0; }
+					to { transform: translateY(0); opacity: 1; }
+				}
+				.animate-drop {
+					animation: drop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+				}
+				@keyframes fade-in {
+					from { opacity: 0; }
+					to { opacity: 1; }
+				}
+				@keyframes slide-in-from-left-4 {
+					from { transform: translateX(-1rem); opacity: 0; }
+					to { transform: translateX(0); opacity: 1; }
+				}
+				@keyframes slide-in-from-bottom-2 {
+					from { transform: translateY(0.5rem); opacity: 0; }
+					to { transform: translateY(0); opacity: 1; }
+				}
+				.animate-in {
+					animation: 0.3s ease-out forwards;
+				}
+				.fade-in { animation-name: fade-in; }
+				.slide-in-from-left-4 { animation-name: slide-in-from-left-4; }
+				.slide-in-from-bottom-2 { animation-name: slide-in-from-bottom-2; }
+			`}</style>
 		</div>
 	)
 }
