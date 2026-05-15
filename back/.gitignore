@@ -7,3 +7,6 @@
 # dist files
 /dist
 /out
+
+# database files
+/database.sqlite
